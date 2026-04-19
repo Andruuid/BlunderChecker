@@ -13,6 +13,7 @@
   let boardFlipped = false;
   let analysisGen = 0; // monotonic counter so late retries can't overwrite newer analyses
   let hlEnabled = true;
+  let userColorOverride = null; // null = auto-detect, 'w' or 'b' = manual override
 
   // ── FEN extraction ─────────────────────────────────────────────────────────
 
@@ -150,30 +151,24 @@
     return null;
   }
 
-  // Source of truth: where is the white king actually rendered?
-  // If it's in the top half of the board, the board is flipped (we're black).
-  // This avoids any disagreement between CSS class checks and the actual DOM.
+  // Source of truth: where is the white king actually rendered on screen?
+  // If it's in the visual top half of the board, the board is flipped (we're black).
+  // Both chess.com and lichess use CSS to render flipped boards — the piece's
+  // "square-XY" class on chess.com is the LOGICAL position, not the visual one,
+  // so we must measure pixel position via getBoundingClientRect.
   function detectOrientationFromPieces() {
     const board = document.querySelector('cg-board') ||
                   document.querySelector('wc-chess-board') ||
                   document.querySelector('chess-board');
     if (!board) return null;
 
-    // Chess.com: white king has square-XY class encoding rank directly
-    const ccKing = board.querySelector('.piece.wk');
-    if (ccKing) {
-      const sqCls = [...ccKing.classList].find(c => /^square-\d{2}$/.test(c));
-      if (sqCls) {
-        const rank = parseInt(sqCls[8]); // 1..8
-        return rank > 4; // white king on top half (ranks 5-8) → flipped
-      }
-    }
-
     const boardRect = board.getBoundingClientRect();
     if (!boardRect.height) return null;
 
-    // Lichess: <piece class="white king ...">
-    const king = board.querySelector('piece.white.king');
+    // Chess.com: <div class="piece wk square-XY">
+    // Lichess:   <piece class="white king ...">
+    const king = board.querySelector('.piece.wk') ||
+                 board.querySelector('piece.white.king');
     if (!king) return null;
 
     const rect = king.getBoundingClientRect();
@@ -333,6 +328,7 @@
       <div class="ca-header">
         <span>♟ BlunderChecker</span>
         <div class="ca-controls">
+          <button class="ca-btn" id="ca-color" title="Your color (click to cycle: Auto → W → B → Auto)">Auto:W</button>
           <button class="ca-btn" id="ca-toggle-hl" title="Toggle analysis (re-reads position)">◉</button>
           <button class="ca-btn ca-close" id="ca-close">✕</button>
         </div>
@@ -352,6 +348,15 @@
     document.getElementById('ca-analyze').addEventListener('click', () => {
       const fen = document.getElementById('ca-fen-input').value.trim();
       if (fen) runAnalysis(fen);
+    });
+
+    document.getElementById('ca-color').addEventListener('click', () => {
+      if (userColorOverride === null) userColorOverride = 'w';
+      else if (userColorOverride === 'w') userColorOverride = 'b';
+      else userColorOverride = null;
+      updateColorButton();
+      clearHighlights();
+      refreshAnalysis(true);
     });
 
     document.getElementById('ca-toggle-hl').addEventListener('click', () => {
@@ -454,8 +459,25 @@
     setResults(html);
   }
 
-  function getUserColor() {
+  function getAutoUserColor() {
     return isBoardFlipped() ? 'b' : 'w';
+  }
+
+  function getUserColor() {
+    return userColorOverride || getAutoUserColor();
+  }
+
+  function updateColorButton() {
+    const btn = document.getElementById('ca-color');
+    if (!btn) return;
+    const auto = getAutoUserColor();
+    if (userColorOverride === null) {
+      btn.textContent = 'Auto:' + auto.toUpperCase();
+      btn.style.opacity = '0.7';
+    } else {
+      btn.textContent = userColorOverride.toUpperCase();
+      btn.style.opacity = '1';
+    }
   }
 
   function runAnalysis(fen) {
@@ -465,6 +487,7 @@
     // If a newer analysis kicked off in between (shouldn't happen sync, but be safe), bail.
     if (myGen !== analysisGen) return;
     renderResults(result);
+    updateColorButton();
     if (!result.error && hlEnabled) highlightResults(result);
   }
 
