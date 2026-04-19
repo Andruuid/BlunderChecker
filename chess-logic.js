@@ -206,6 +206,10 @@ function findPossibleChecks(board, activeColor, enPassant) {
   const kingIdx = board.findIndex(p => p && p.type === 'k' && p.color === oppColor);
   if (kingIdx === -1) return [];
 
+  // If the king is already in check, don't look for new checks —
+  // almost every move would "maintain" the existing check, flooding the UI.
+  if (isAttackedBy(board, kingIdx, activeColor, enPassant)) return [];
+
   const checks = [];
 
   for (let from = 0; from < 64; from++) {

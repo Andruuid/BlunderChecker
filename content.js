@@ -281,8 +281,8 @@
   }
 
   function highlightResults(result) {
-    clearHighlights();
     if (!getBoardElement()) return;
+    clearHighlights();
 
     // Red: my pieces that can be taken in an uneven trade
     for (const h of result.hanging.ours) {
@@ -484,31 +484,23 @@
 
   // ── Init ───────────────────────────────────────────────────────────────────
 
+  let pollTimer = null;
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(() => {
+      const p = document.getElementById(PANEL_ID);
+      if (!p || p.style.display === 'none') return;
+      refreshAnalysis(true);
+    }, 500);
+  }
+
   function init() {
-    const panel = createPanel();
+    createPanel();
 
     setResults('<p class="ca-warn">Reading position…</p>');
     refreshAnalysis(true);
-
-    // Watch for board changes. Clear stale highlights immediately, then retry
-    // reading the FEN until pieces settle (refreshAnalysis handles the retry).
-    let debounceTimer = null;
-    const onChange = () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        if (panel.style.display === 'none') return;
-        clearHighlights();
-        refreshAnalysis(false);
-      }, 150);
-    };
-
-    const observer = new MutationObserver(onChange);
-    const boardEl = getBoardElement();
-    if (boardEl) {
-      observer.observe(boardEl, { childList: true, subtree: true, attributes: true });
-    }
-    const moveList = document.querySelector('.tview2, .moves, vg-moves, l4x');
-    if (moveList) observer.observe(moveList, { childList: true, subtree: true });
+    startPolling();
   }
 
   // Expose toggle for popup. When opening, always re-read the current position
