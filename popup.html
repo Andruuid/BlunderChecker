@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 220px;
+      padding: 12px 14px;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      margin: 0;
+    }
+    h3 { margin: 0 0 10px; font-size: 14px; }
+    button {
+      width: 100%;
+      padding: 8px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 8px;
+    }
+    button:hover { background: #74c7ec; }
+    p {
+      margin: 0;
+      font-size: 11px;
+      color: #6c7086;
+      line-height: 1.5;
+    }
+    .site { color: #a6e3a1; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h3>♟ BlunderChecker</h3>
+  <button id="toggle">Toggle Panel on Page</button>
+  <p>Works on <span class="site">chess.com</span> and <span class="site">lichess.org</span>.</p>
+  <p style="margin-top:6px">Shows hanging pieces and possible checks. Paste any FEN to analyze manually.</p>
+  <script src="popup.js"></script>
+</body>
+</html>
