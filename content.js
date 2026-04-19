@@ -77,35 +77,31 @@
   }
 
   // Read pieces from chess.com's rendered piece divs → FEN string
+  // Chess.com gives every piece a class like `square-XY` where X=file(1-8), Y=rank(1-8).
+  // This is far more reliable than measuring pixel positions during animations.
   function fenFromChessComDOM() {
-    const board = document.querySelector('chess-board') ||
-                  document.querySelector('.board-layout-chessboard');
+    const board = document.querySelector('wc-chess-board') ||
+                  document.querySelector('chess-board') ||
+                  document.querySelector('.board-layout-chessboard') ||
+                  document.querySelector('.board');
     if (!board) return null;
-    const pieces = board.querySelectorAll('[class*="piece "], [class*=" piece"]');
+    const pieces = board.querySelectorAll('.piece');
     if (!pieces.length) return null;
 
-    const boardRect = board.getBoundingClientRect();
-    const sqW = boardRect.width / 8;
-    const sqH = boardRect.height / 8;
-    const isFlipped = isBoardFlipped();
     const grid = new Array(64).fill(null);
 
-    // chess.com uses classes like "wp" "bn" "br" etc.
-    const typeMap = { p: 'p', n: 'n', b: 'b', r: 'r', q: 'q', k: 'k' };
-
     for (const piece of pieces) {
-      const rect = piece.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2 - boardRect.left;
-      const cy = rect.top + rect.height / 2 - boardRect.top;
-      let file = Math.floor(cx / sqW);
-      let rank = 7 - Math.floor(cy / sqH);
-      if (isFlipped) { file = 7 - file; rank = 7 - rank; }
+      const cls = [...piece.classList];
+      const pieceCls = cls.find(c => /^[wb][pnbrqk]$/.test(c));
+      const sqCls = cls.find(c => /^square-\d{2}$/.test(c));
+      if (!pieceCls || !sqCls) continue;
+
+      const color = pieceCls[0];
+      const type = pieceCls[1];
+      const file = parseInt(sqCls[7]) - 1;  // square-XY: X=file 1..8 → 0..7
+      const rank = parseInt(sqCls[8]) - 1;  // Y=rank 1..8 → 0..7
       if (file < 0 || file > 7 || rank < 0 || rank > 7) continue;
 
-      const cls = [...piece.classList].find(c => /^[wb][pnbrqk]$/.test(c));
-      if (!cls) continue;
-      const color = cls[0] === 'w' ? 'w' : 'b';
-      const type = cls[1];
       grid[rank * 8 + file] = { type, color };
     }
 
@@ -130,7 +126,8 @@
     const host = location.hostname;
 
     if (host.includes('chess.com')) {
-      const cb = document.querySelector('chess-board');
+      const cb = document.querySelector('wc-chess-board') ||
+                 document.querySelector('chess-board');
       if (cb) {
         const fen = cb.getAttribute('fen') || cb.fen;
         if (fen && fen.includes('/')) return fen;
@@ -157,19 +154,26 @@
   // If it's in the top half of the board, the board is flipped (we're black).
   // This avoids any disagreement between CSS class checks and the actual DOM.
   function detectOrientationFromPieces() {
-    const board = document.querySelector('cg-board') || document.querySelector('chess-board');
+    const board = document.querySelector('cg-board') ||
+                  document.querySelector('wc-chess-board') ||
+                  document.querySelector('chess-board');
     if (!board) return null;
+
+    // Chess.com: white king has square-XY class encoding rank directly
+    const ccKing = board.querySelector('.piece.wk');
+    if (ccKing) {
+      const sqCls = [...ccKing.classList].find(c => /^square-\d{2}$/.test(c));
+      if (sqCls) {
+        const rank = parseInt(sqCls[8]); // 1..8
+        return rank > 4; // white king on top half (ranks 5-8) → flipped
+      }
+    }
+
     const boardRect = board.getBoundingClientRect();
     if (!boardRect.height) return null;
 
     // Lichess: <piece class="white king ...">
-    let king = board.querySelector('piece.white.king');
-    // Chess.com: <[class~="piece"][class~="wk"]>
-    if (!king) {
-      for (const el of board.querySelectorAll('[class*="wk"]')) {
-        if (el.classList.contains('wk')) { king = el; break; }
-      }
-    }
+    const king = board.querySelector('piece.white.king');
     if (!king) return null;
 
     const rect = king.getBoundingClientRect();
@@ -184,9 +188,10 @@
     // Fallback: CSS classes (only if pieces aren't readable yet)
     const host = location.hostname;
     if (host.includes('chess.com')) {
-      const cb = document.querySelector('chess-board');
-      return cb?.getAttribute('orientation') === 'black' ||
-             cb?.classList.contains('flipped') || false;
+      const cb = document.querySelector('wc-chess-board') ||
+                 document.querySelector('chess-board');
+      return cb?.classList.contains('flipped') ||
+             cb?.getAttribute('orientation') === 'black' || false;
     }
     if (host.includes('lichess.org')) {
       const board = document.querySelector('cg-board');
@@ -204,7 +209,8 @@
   }
 
   function getBoardElement() {
-    return document.querySelector('chess-board') ||
+    return document.querySelector('wc-chess-board') ||
+           document.querySelector('chess-board') ||
            document.querySelector('cg-board') ||
            document.querySelector('.cg-wrap');
   }
