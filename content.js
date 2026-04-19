@@ -14,6 +14,7 @@
   let analysisGen = 0; // monotonic counter so late retries can't overwrite newer analyses
   let hlEnabled = true;
   let userColorOverride = null; // null = auto-detect, 'w' or 'b' = manual override
+  let showRiskyChecks = false; // when false, hide checks that lose material
 
   // ── FEN extraction ─────────────────────────────────────────────────────────
 
@@ -298,24 +299,31 @@
     }
 
     // Green dot on opponent king + green dots on pieces that can deliver check
-    if (result.hasChecks && result.opponentKingSquare) {
+    const visibleChecks = filterChecks(result.checks);
+    if (visibleChecks.length && result.opponentKingSquare) {
       addDotMarker(result.opponentKingSquare, 'rgba(50, 200, 80, 0.9)',
         '♚ Check available!');
 
       const seen = new Set();
-      for (const c of result.checks) {
+      for (const c of visibleChecks) {
         if (seen.has(c.from)) continue;
         seen.add(c.from);
         addDotMarker(c.from, 'rgba(50, 200, 80, 0.9)',
-          `${c.pieceName} can give check`);
+          `${c.pieceName} can give check${c.safe ? '' : ' (sacrifice)'}`);
       }
     }
 
-    // Red dot on my king if opponent can check me
-    if (result.hasOppChecks && result.myKingSquare) {
+    // Red dot on my king if opponent can check me (apply same risky filter)
+    const visibleOppChecks = filterChecks(result.oppChecks || []);
+    if (visibleOppChecks.length && result.myKingSquare) {
       addDotMarker(result.myKingSquare, 'rgba(220, 50, 50, 0.9)',
         '♚ Opponent can check you!');
     }
+  }
+
+  function filterChecks(checks) {
+    if (!checks) return [];
+    return showRiskyChecks ? checks : checks.filter(c => c.safe);
   }
 
   // ── Panel UI ───────────────────────────────────────────────────────────────
@@ -329,6 +337,7 @@
         <span>♟ BlunderChecker</span>
         <div class="ca-controls">
           <button class="ca-btn" id="ca-color" title="Your color (click to cycle: Auto → W → B → Auto)">Auto:W</button>
+          <button class="ca-btn" id="ca-risky" title="Show risky checks (sacrifices)">!</button>
           <button class="ca-btn" id="ca-toggle-hl" title="Toggle analysis (re-reads position)">◉</button>
           <button class="ca-btn ca-close" id="ca-close">✕</button>
         </div>
@@ -358,6 +367,15 @@
       clearHighlights();
       refreshAnalysis(true);
     });
+
+    document.getElementById('ca-risky').addEventListener('click', () => {
+      showRiskyChecks = !showRiskyChecks;
+      document.getElementById('ca-risky').style.opacity = showRiskyChecks ? '1' : '0.4';
+      clearHighlights();
+      refreshAnalysis(true);
+    });
+    // Initial dimmed state — risky checks hidden by default
+    document.getElementById('ca-risky').style.opacity = '0.4';
 
     document.getElementById('ca-toggle-hl').addEventListener('click', () => {
       hlEnabled = !hlEnabled;
@@ -431,9 +449,10 @@
     }
     html += '</div>';
 
+    const visibleChecks = filterChecks(result.checks);
     html += '<div class="ca-section">';
     html += '<div class="ca-section-title ca-green">✓ Good captures available</div>';
-    if (theirs.length === 0 && !result.hasChecks) {
+    if (theirs.length === 0 && visibleChecks.length === 0) {
       html += '<p class="ca-empty">No good captures or checks</p>';
     } else {
       for (const h of theirs) {
@@ -443,11 +462,13 @@
           <span>${h.pieceName} · take with ${atk}</span>
         </div>`;
       }
-      if (result.hasChecks) {
-        const pieces = [...new Set(result.checks.map(c => c.pieceName))].join(', ');
+      if (visibleChecks.length) {
+        const pieces = [...new Set(visibleChecks.map(c => c.pieceName))].join(', ');
+        const hidden = result.checks.length - visibleChecks.length;
+        const note = hidden > 0 ? ` (${hidden} risky hidden)` : '';
         html += `<div class="ca-item ca-item-green">
           <span class="ca-sq">${result.opponentKingSquare}</span>
-          <span>King · check available via ${pieces}</span>
+          <span>King · check available via ${pieces}${note}</span>
         </div>`;
       }
     }

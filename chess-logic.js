@@ -232,13 +232,34 @@ function findPossibleChecks(board, activeColor, enPassant) {
       // (A king can never directly deliver check — only discover one — so
       //  we don't need to track our own king's destination here.)
       if (isAttackedBy(newBoard, kingIdx, activeColor, -1)) {
+        // Evaluate whether the checker survives — i.e. is this check a
+        // material sacrifice? Same trade logic as findHangingPieces.
+        const atks = [];
+        const defs = [];
+        for (let j = 0; j < 64; j++) {
+          const p = newBoard[j];
+          if (!p || j === to) continue;
+          if (getAttackedSquares(newBoard, j, -1).includes(to)) {
+            if (p.color === oppColor) atks.push(p);
+            else defs.push(p);
+          }
+        }
+        let safe = true;
+        if (atks.length > 0) {
+          const minAtk = Math.min(...atks.map(a => PIECE_VALUES[a.type]));
+          const pieceVal = PIECE_VALUES[piece.type];
+          if (defs.length === 0) safe = false;
+          else if (minAtk < pieceVal) safe = false;
+        }
+
         checks.push({
           from: idxToSq(from),
           fromIdx: from,
           to: idxToSq(to),
           toIdx: to,
           piece,
-          pieceName: PIECE_NAMES[piece.type]
+          pieceName: PIECE_NAMES[piece.type],
+          safe
         });
       }
     }
