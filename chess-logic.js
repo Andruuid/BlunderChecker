@@ -296,5 +296,5 @@ function analyzePosition(fen, userColor) {
 
 // Export for content script
 if (typeof window !== 'undefined') {
-  window.ChessAnalyzer = { analyzePosition, parseFEN, idxToSq };
+  window.ChessAnalyzer = { analyzePosition, parseFEN, idxToSq, sqToIdx, isAttackedBy };
 }

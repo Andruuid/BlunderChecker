@@ -334,7 +334,7 @@
     panel.id = PANEL_ID;
     panel.innerHTML = `
       <div class="ca-header">
-        <span>♟ BlunderChecker</span>
+        <span>♟ BlunderCheckerPro</span>
         <div class="ca-controls">
           <button class="ca-btn" id="ca-color" title="Your color (click to cycle: Auto → W → B → Auto)">Auto:W</button>
           <button class="ca-btn" id="ca-risky" title="Show risky checks (sacrifices)">!</button>
@@ -532,6 +532,214 @@
     }
   }
 
+  // ── Drag preview: analyze hypothetical position while a piece is held ──────
+  //
+  // Flow: mousedown on a piece → remember source square + captured FEN.
+  // mousemove → figure out hover square, synthesize FEN with piece moved and
+  // active color flipped (so analysis shows opponent's responses), rerun.
+  // mouseup → revert to real board.
+
+  let dragState = null;
+  let dragRaf = 0;
+  let dragTargetHl = null; // { sq, el } — persists across analyses
+  const DRAG_TARGET_CLASS = 'ca-drag-target';
+
+  const ROLE_MAP = { pawn: 'p', knight: 'n', bishop: 'b', rook: 'r', queen: 'q', king: 'k' };
+
+  function squareFromPointer(boardEl, x, y) {
+    const r = boardEl.getBoundingClientRect();
+    if (!r.width || x < r.left || x >= r.right || y < r.top || y >= r.bottom) return null;
+    const file = Math.floor((x - r.left) / (r.width / 8));
+    const rank = 7 - Math.floor((y - r.top) / (r.height / 8));
+    const flipped = isBoardFlipped();
+    const f = flipped ? 7 - file : file;
+    const ra = flipped ? 7 - rank : rank;
+    if (f < 0 || f > 7 || ra < 0 || ra > 7) return null;
+    return 'abcdefgh'[f] + (ra + 1);
+  }
+
+  function pieceInfoFromEl(el) {
+    const cls = [...el.classList];
+    const cc = cls.find(c => /^[wb][pnbrqk]$/.test(c));
+    if (cc) return { color: cc[0], type: cc[1] };
+    const color = cls.includes('white') ? 'w' : cls.includes('black') ? 'b' : null;
+    const roleKey = cls.find(c => ROLE_MAP[c]);
+    if (color && roleKey) return { color, type: ROLE_MAP[roleKey] };
+    return null;
+  }
+
+  function sourceSquareFromPieceEl(el, boardEl) {
+    const sqCls = [...el.classList].find(c => /^square-\d{2}$/.test(c));
+    if (sqCls) {
+      const file = parseInt(sqCls[7]) - 1;
+      const rank = parseInt(sqCls[8]) - 1;
+      if (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
+        return 'abcdefgh'[file] + (rank + 1);
+      }
+    }
+    const pr = el.getBoundingClientRect();
+    return squareFromPointer(boardEl, pr.left + pr.width / 2, pr.top + pr.height / 2);
+  }
+
+  function parseFenGrid(fen) {
+    const grid = new Array(64).fill(null);
+    const parts = fen.split(/\s+/);
+    const rows = parts[0].split('/');
+    for (let i = 0; i < 8; i++) {
+      const rank = 7 - i;
+      let file = 0;
+      for (const ch of rows[i]) {
+        if (/\d/.test(ch)) { file += parseInt(ch); }
+        else {
+          grid[rank * 8 + file] = {
+            type: ch.toLowerCase(),
+            color: ch === ch.toUpperCase() ? 'w' : 'b'
+          };
+          file++;
+        }
+      }
+    }
+    return { grid, active: parts[1] || 'w' };
+  }
+
+  function gridToFen(grid, active) {
+    let fen = '';
+    for (let r = 7; r >= 0; r--) {
+      let empty = 0;
+      for (let f = 0; f < 8; f++) {
+        const p = grid[r * 8 + f];
+        if (!p) empty++;
+        else {
+          if (empty) { fen += empty; empty = 0; }
+          fen += p.color === 'w' ? p.type.toUpperCase() : p.type;
+        }
+      }
+      if (empty) fen += empty;
+      if (r > 0) fen += '/';
+    }
+    return fen + ` ${active} - - 0 1`;
+  }
+
+  function sqIdx(sq) {
+    return (parseInt(sq[1]) - 1) * 8 + 'abcdefgh'.indexOf(sq[0]);
+  }
+
+  function buildHypotheticalFen(originalFen, fromSq, toSq, piece) {
+    const { grid, active } = parseFenGrid(originalFen);
+    grid[sqIdx(fromSq)] = null;
+    grid[sqIdx(toSq)] = { type: piece.type, color: piece.color };
+    return gridToFen(grid, active === 'w' ? 'b' : 'w');
+  }
+
+  function onDragStart(e) {
+    if (e.button !== 0) return;
+    const boardEl = getBoardElement();
+    if (!boardEl || !boardEl.contains(e.target)) return;
+    const pieceEl = e.target.closest('.piece, piece');
+    if (!pieceEl || !boardEl.contains(pieceEl)) return;
+    const info = pieceInfoFromEl(pieceEl);
+    if (!info || info.color !== getUserColor()) return;
+    const source = sourceSquareFromPieceEl(pieceEl, boardEl);
+    if (!source) return;
+    const baseFen = currentFen || getFenFromPage();
+    if (!baseFen) return;
+    dragState = { source, piece: info, originalFen: baseFen, lastTarget: null };
+  }
+
+  function onDragMove(e) {
+    if (!dragState) return;
+    if (dragRaf) return;
+    dragRaf = requestAnimationFrame(() => {
+      dragRaf = 0;
+      if (!dragState) return;
+      const boardEl = getBoardElement();
+      if (!boardEl) return;
+      const target = squareFromPointer(boardEl, e.clientX, e.clientY);
+      if (!target || target === dragState.source) {
+        if (dragState.lastTarget) {
+          dragState.lastTarget = null;
+          clearDragTargetHighlight();
+          runAnalysis(dragState.originalFen);
+        }
+        return;
+      }
+      if (target === dragState.lastTarget) return;
+      dragState.lastTarget = target;
+      const hFen = buildHypotheticalFen(dragState.originalFen, dragState.source, target, dragState.piece);
+      runAnalysis(hFen);
+      updateDragTargetHighlight(hFen, target, dragState.piece);
+    });
+  }
+
+  // Warn when the drag target square is attacked by the opponent. The normal
+  // hanging logic skips equal-value trades (Q-for-Q), but when you're placing
+  // your own piece onto a square the opponent covers, you almost always want
+  // to see that at a glance — so flag it regardless.
+  //
+  // The highlight lives on its own class (DRAG_TARGET_CLASS) so clearHighlights()
+  // won't wipe it during the many re-analyses that fire while dragging.
+  function updateDragTargetHighlight(fen, targetSq, piece) {
+    if (!window.ChessAnalyzer?.isAttackedBy || !window.ChessAnalyzer?.parseFEN) {
+      clearDragTargetHighlight();
+      return;
+    }
+    let attacked = false;
+    try {
+      const { board, enPassant } = window.ChessAnalyzer.parseFEN(fen);
+      const oppColor = piece.color === 'w' ? 'b' : 'w';
+      attacked = window.ChessAnalyzer.isAttackedBy(board, sqIdx(targetSq), oppColor, enPassant);
+    } catch (_) { attacked = false; }
+
+    if (!attacked) { clearDragTargetHighlight(); return; }
+    // Same square still attacked → reuse the existing element, just reposition
+    // (the board may have reflowed). No flicker on stationary hover.
+    const boardEl = getBoardElement();
+    if (!boardEl) return;
+    const pos = squareToPosition(targetSq, boardEl);
+    if (dragTargetHl && dragTargetHl.sq === targetSq && dragTargetHl.el.isConnected) {
+      dragTargetHl.el.style.left = pos.left + 'px';
+      dragTargetHl.el.style.top = pos.top + 'px';
+      dragTargetHl.el.style.width = pos.width + 'px';
+      dragTargetHl.el.style.height = pos.height + 'px';
+      return;
+    }
+    clearDragTargetHighlight();
+    const div = document.createElement('div');
+    div.className = DRAG_TARGET_CLASS;
+    div.style.cssText = `
+      position: absolute;
+      left: ${pos.left}px;
+      top: ${pos.top}px;
+      width: ${pos.width}px;
+      height: ${pos.height}px;
+      background: rgba(220, 50, 50, 0.55);
+      pointer-events: none;
+      z-index: 9998;
+      border-radius: 2px;
+      box-sizing: border-box;
+    `;
+    div.title = `⚠ ${targetSq} is attacked`;
+    document.body.appendChild(div);
+    dragTargetHl = { sq: targetSq, el: div };
+  }
+
+  function clearDragTargetHighlight() {
+    document.querySelectorAll('.' + DRAG_TARGET_CLASS).forEach(el => el.remove());
+    dragTargetHl = null;
+  }
+
+  function onDragEnd() {
+    if (!dragState) return;
+    dragState = null;
+    if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = 0; }
+    clearDragTargetHighlight();
+    setTimeout(() => refreshAnalysis(true), 120);
+  }
+
+  document.addEventListener('mousedown', onDragStart, true);
+  document.addEventListener('mousemove', onDragMove, true);
+  document.addEventListener('mouseup', onDragEnd, true);
+
   // ── Init ───────────────────────────────────────────────────────────────────
 
   let pollTimer = null;
@@ -541,6 +749,7 @@
     pollTimer = setInterval(() => {
       const p = document.getElementById(PANEL_ID);
       if (!p || p.style.display === 'none') return;
+      if (dragState) return; // don't clobber the drag preview
       refreshAnalysis(true);
     }, 500);
   }

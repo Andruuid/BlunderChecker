@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "BlunderChecker",
+  "name": "BlunderCheckerPro",
   "version": "1.0",
   "description": "Detects hanging pieces and possible checks in chess positions",
   "permissions": ["activeTab", "scripting"],
@@ -10,7 +10,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "BlunderChecker",
+    "default_title": "BlunderCheckerPro",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
