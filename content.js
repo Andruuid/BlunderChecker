@@ -543,6 +543,11 @@
   let dragRaf = 0;
   let dragTargetHl = null; // { sq, el } — persists across analyses
   const DRAG_TARGET_CLASS = 'ca-drag-target';
+  // Persistent drag highlights keyed "<sq>:<type>" so elements survive from
+  // one drag-target to the next: if the same square keeps the same highlight,
+  // we reuse the DOM node instead of destroy+recreate (no flicker).
+  const DRAG_HL_CLASS = 'ca-drag-hl';
+  const dragHighlights = new Map();
 
   const ROLE_MAP = { pawn: 'p', knight: 'n', bishop: 'b', rook: 'r', queen: 'q', king: 'k' };
 
@@ -659,6 +664,7 @@
         if (dragState.lastTarget) {
           dragState.lastTarget = null;
           clearDragTargetHighlight();
+          clearDragHighlights();
           runAnalysis(dragState.originalFen);
         }
         return;
@@ -666,9 +672,118 @@
       if (target === dragState.lastTarget) return;
       dragState.lastTarget = target;
       const hFen = buildHypotheticalFen(dragState.originalFen, dragState.source, target, dragState.piece);
-      runAnalysis(hFen);
+      runDragPreview(hFen);
       updateDragTargetHighlight(hFen, target, dragState.piece);
     });
+  }
+
+  // Drag-specific analysis path. Runs the analyzer and renders highlights into
+  // the persistent drag layer (DRAG_HL_CLASS) instead of the regular layer.
+  // clearHighlights() can't touch these, so they survive across rapid target
+  // changes and polling ticks without flicker.
+  function runDragPreview(hFen) {
+    currentFen = hFen;
+    const result = window.ChessAnalyzer.analyzePosition(hFen, getUserColor());
+    renderResults(result);
+    updateColorButton();
+    clearHighlights(); // drop any real-position highlights from before the drag
+    if (!result.error && hlEnabled) syncDragHighlights(result);
+  }
+
+  function syncDragHighlights(result) {
+    const desired = new Map();
+    for (const h of result.hanging.ours) {
+      desired.set(`${h.square}:sq`, {
+        square: h.square, kind: 'square',
+        color: 'rgba(220, 50, 50, 0.55)',
+        label: `⚠ ${h.pieceName} — ${h.defended ? 'can be traded down' : 'undefended'}`
+      });
+    }
+    for (const h of result.hanging.theirs) {
+      desired.set(`${h.square}:sq`, {
+        square: h.square, kind: 'square',
+        color: 'rgba(50, 200, 80, 0.50)',
+        label: `✓ ${h.pieceName} — favorable capture`
+      });
+    }
+    const visibleChecks = filterChecks(result.checks);
+    if (visibleChecks.length && result.opponentKingSquare) {
+      desired.set(`${result.opponentKingSquare}:dot`, {
+        square: result.opponentKingSquare, kind: 'dot',
+        color: 'rgba(50, 200, 80, 0.9)', label: '♚ Check available!'
+      });
+      const seen = new Set();
+      for (const c of visibleChecks) {
+        if (seen.has(c.from)) continue;
+        seen.add(c.from);
+        desired.set(`${c.from}:dot`, {
+          square: c.from, kind: 'dot',
+          color: 'rgba(50, 200, 80, 0.9)',
+          label: `${c.pieceName} can give check${c.safe ? '' : ' (sacrifice)'}`
+        });
+      }
+    }
+    const visibleOppChecks = filterChecks(result.oppChecks || []);
+    if (visibleOppChecks.length && result.myKingSquare) {
+      desired.set(`${result.myKingSquare}:dot`, {
+        square: result.myKingSquare, kind: 'dot',
+        color: 'rgba(220, 50, 50, 0.9)',
+        label: '♚ Opponent can check you!'
+      });
+    }
+
+    // Drop stale highlights
+    for (const [key, hl] of [...dragHighlights]) {
+      const want = desired.get(key);
+      if (!want || want.color !== hl.color) {
+        hl.el.remove();
+        dragHighlights.delete(key);
+      }
+    }
+    // Add / reposition
+    const boardEl = getBoardElement();
+    if (!boardEl) return;
+    for (const [key, info] of desired) {
+      const pos = squareToPosition(info.square, boardEl);
+      let hl = dragHighlights.get(key);
+      if (!hl || !hl.el.isConnected) {
+        const div = document.createElement('div');
+        div.className = DRAG_HL_CLASS;
+        div.style.position = 'absolute';
+        div.style.background = info.color;
+        div.style.pointerEvents = 'none';
+        div.style.boxSizing = 'border-box';
+        if (info.kind === 'dot') {
+          div.style.zIndex = '9999';
+          div.style.borderRadius = '50%';
+        } else {
+          div.style.zIndex = '9998';
+          div.style.borderRadius = '2px';
+        }
+        document.body.appendChild(div);
+        hl = { color: info.color, kind: info.kind, el: div };
+        dragHighlights.set(key, hl);
+      }
+      hl.el.title = info.label;
+      if (info.kind === 'dot') {
+        const dotSize = Math.round(pos.width * 0.25);
+        hl.el.style.left = (pos.left + (pos.width - dotSize) / 2) + 'px';
+        hl.el.style.top = (pos.top + (pos.height - dotSize) / 2) + 'px';
+        hl.el.style.width = dotSize + 'px';
+        hl.el.style.height = dotSize + 'px';
+      } else {
+        hl.el.style.left = pos.left + 'px';
+        hl.el.style.top = pos.top + 'px';
+        hl.el.style.width = pos.width + 'px';
+        hl.el.style.height = pos.height + 'px';
+      }
+    }
+  }
+
+  function clearDragHighlights() {
+    for (const hl of dragHighlights.values()) hl.el.remove();
+    dragHighlights.clear();
+    document.querySelectorAll('.' + DRAG_HL_CLASS).forEach(el => el.remove());
   }
 
   // Warn when the drag target square is attacked by the opponent. The normal
@@ -733,6 +848,7 @@
     dragState = null;
     if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = 0; }
     clearDragTargetHighlight();
+    clearDragHighlights();
     setTimeout(() => refreshAnalysis(true), 120);
   }
 
